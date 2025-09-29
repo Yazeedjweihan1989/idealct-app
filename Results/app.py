@@ -1,25 +1,24 @@
-# app.py — IDEAL-CT Automated GUI (lives in Results/)
-import os, io, glob, joblib, requests
+# app.py — IDEAL-CT Automated GUI (place this in Results/app.py)
+import os, io, joblib, requests
 from pathlib import Path
 import streamlit as st
 import pandas as pd
 import numpy as np
 
-# ---------- Paths (relative to this file) ----------
+# ---------- Paths ----------
 APP_DIR = Path(__file__).resolve().parent         # .../Results
 RESULTS_DIR = APP_DIR                             # models live here
-BASE_DIR = APP_DIR.parent                         # project root
 
 # ---------- Page ----------
-st.set_page_config(page_title="IDEAL-CT Automated GUI", layout="wide")
+st.set_page_config(page_title="IDEAL-CT Automated Prediction App", layout="wide")
 
-# ---------- Canonical headers + helpers (match training pipeline) ----------
+# ---------- Canonical headers + helpers ----------
 CANON_FEATURES = ["NMAS", "Asphalt_Content", "RAP", "RAS", "VMA", "PG_High", "PG_Low"]
 TARGET_CANDIDATES = ["IDEAL_CT", "ideal_ct", "target", "Target", "IDEALCT"]
+
 ALIASES = {
     "id": "ID_code", "idcode": "ID_code", "id_code": "ID_code",
     "asphaltcontent": "Asphalt_Content", "asphalt_cont": "Asphalt_Content",
-    "asphalt_cont_": "Asphalt_Content", "asphalt_%": "Asphalt_Content", "asphalt%": "Asphalt_Content",
     "pg_high": "PG_High", "pg high": "PG_High",
     "pg_low": "PG_Low",  "pg low":  "PG_Low",
 }
@@ -27,18 +26,21 @@ def _norm(s: str) -> str:
     return str(s).strip().replace("-", "_").replace(" ", "_").replace(".", "_").lower()
 
 def normalize_dataframe(df: pd.DataFrame):
-    norm = {c: _norm(c) for c in df.columns}
+    # fix common header variants
     ren = {}
-    for c, n in norm.items():
-        if n in ALIASES:
-            ren[c] = ALIASES[n]
+    for c in df.columns:
+        n = _norm(c)
+        if n in ALIASES: ren[c] = ALIASES[n]
         if n.startswith("asphalt_cont") and c != "Asphalt_Content":
             ren[c] = "Asphalt_Content"
     if ren: df = df.rename(columns=ren)
+
     target = None
+    norm_targets = [t.lower() for t in TARGET_CANDIDATES]
     for c in df.columns:
-        if _norm(c) in [t.lower() for t in TARGET_CANDIDATES]:
-            target = c; break
+        if _norm(c) in norm_targets:
+            target = c
+            break
     return df, target
 
 def quick_metrics(y_true, y_pred):
@@ -52,21 +54,22 @@ def quick_metrics(y_true, y_pred):
 
 # ---------- Model discovery / download ----------
 def find_latest_model(results_dir: Path):
-    cands = list(results_dir.glob("BestModel_*.pkl"))
-    return max(cands, key=os.path.getmtime) if cands else None
+    cands = sorted(results_dir.glob("BestModel_*.pkl"), key=os.path.getmtime, reverse=True)
+    return str(cands[0]) if cands else None
 
 def ensure_model_file():
     """
     If no local BestModel_*.pkl found, try to download from secret MODEL_URL or env var.
+    Saves to Results/BestModel_remote.pkl
     """
     local = find_latest_model(RESULTS_DIR)
-    if local: return str(local)
+    if local: return local
     url = st.secrets.get("MODEL_URL", "") or os.getenv("MODEL_URL", "")
     if not url:
         return None
     dest = RESULTS_DIR / "BestModel_remote.pkl"
     try:
-        with st.status("Downloading model...", expanded=True):
+        with st.status("Downloading model...", expanded=False):
             r = requests.get(url, timeout=180)
             r.raise_for_status()
             dest.write_bytes(r.content)
@@ -104,7 +107,7 @@ if uploaded_model is not None:
         model_features = get_model_features_fallback(model)
         st.sidebar.success("Loaded model from upload.")
     except Exception as e:
-        st.sidebar.error(f"Could not load uploaded model: {e}")
+        st.sidebar.error(f"Could not load uploaded model:\n{e}")
 elif model_path_text:
     try:
         model = load_model(model_path_text)
@@ -151,7 +154,7 @@ if mode.startswith("Calculator"):
             st.success(f"**Predicted IDEAL-CT:** {yhat:.2f}")
             st.dataframe(row.assign(Predicted_IDEAL_CT=[yhat]))
         except Exception as e:
-            st.error(f"Prediction failed: {e}")
+            st.error(f"Prediction failed:\n{e}")
 
 # ---------- Batch ----------
 else:
@@ -179,7 +182,7 @@ else:
         try:
             df = pd.read_csv(up) if up.name.lower().endswith(".csv") else pd.read_excel(up)
         except Exception as e:
-            st.error(f"Could not read file: {e}"); st.stop()
+            st.error(f"Could not read file:\n{e}"); st.stop()
 
         df, target_col = normalize_dataframe(df)
         id_col = "ID_code" if "ID_code" in df.columns else None
@@ -198,7 +201,7 @@ else:
         try:
             preds = model.predict(X)
         except Exception as e:
-            st.error(f"Prediction failed: {e}"); st.stop()
+            st.error(f"Prediction failed:\n{e}"); st.stop()
 
         out = df.copy(); out["Predicted_IDEAL_CT"] = preds
         st.subheader("Preview"); st.dataframe(out.head(50))
@@ -221,8 +224,7 @@ else:
 # ---------- Help ----------
 with st.expander("Help & Notes"):
     st.markdown(f"""
-- App auto-detects its location. Models are searched in: **{RESULTS_DIR}**.
-- You can paste a path, upload a .pkl, or set **MODEL_URL** in Streamlit *Secrets* to download at startup.
+- Models are searched in **{RESULTS_DIR}**. You can paste a path, upload a .pkl, or set **MODEL_URL** in Secrets.
 - Header typos are auto-fixed (e.g., *Asphalt_Cont* → **Asphalt_Content**).
 - **Calculator** predicts a single mix; **Batch** accepts .xlsx/.csv and exports predictions.
 """)
