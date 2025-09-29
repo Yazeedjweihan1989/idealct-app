@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+.DS_Store
+Thumbs.db
+*.xlsx
+*.csv
+# comment the next line if you want to commit a small model
+Results/*.pkl
